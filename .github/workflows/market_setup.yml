@@ -2,7 +2,7 @@ name: Run Market Scanner
 
 on:
   schedule:
-    - cron: "*/2 * * * *"  # Runs every 2 minutes
+    - cron: "*/2 13-16 * * 1-5"  # Runs every 2 minutes from 8 AM to 11 AM EST (Mon-Fri)
   workflow_dispatch:  # Allows manual trigger
 
 jobs:
