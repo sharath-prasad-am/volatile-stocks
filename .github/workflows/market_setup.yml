@@ -3,12 +3,14 @@ name: Run Market Scanner
 on:
   schedule:
     - cron: "*/2 * * * *"  # Runs every 2 minutes
+  workflow_dispatch:  # Allows manual trigger
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repo
+      - name: Checkout Repository
         uses: actions/checkout@v3
 
       - name: Setup Python
@@ -19,5 +21,10 @@ jobs:
       - name: Install Dependencies
         run: pip install requests pandas alpaca-trade-api schedule
 
-      - name: Run Script
+      - name: Run Market Scanner
         run: python market_scanner.py
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
