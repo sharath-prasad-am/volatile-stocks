@@ -70,11 +70,7 @@ def track_volatile_stocks():
         except Exception as e:
             continue  # Skip if data isn't available
 
-# Schedule the script to run every 2 minutes
-schedule.every(1).minutes.do(track_volatile_stocks)
-
-print("✅ Running market scan every 2 minutes... Alerts will be sent via Telegram!")
-
+# Main loop to run every 2 minutes
 while True:
-    schedule.run_pending()
-    time.sleep(1)
+    scan_market()
+    time.sleep(120)  # Wait for 2 minutes
