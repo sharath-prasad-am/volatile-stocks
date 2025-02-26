@@ -13,73 +13,68 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BASE_URL = "https://paper-api.alpaca.markets"
 
 # Initialize Alpaca API
-api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=BASE_URL)
+api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=BASE_URL, api_version="v2")
 
-# Track stock movements
-tracked_stocks = {}
+# Dictionary to store price history
+price_tracking = {}
 
-# Function to send Telegram alerts
-def send_telegram_message(message):
+def send_telegram_alert(message):
+    """Sends an alert message to Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    requests.post(url, data=payload)
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    requests.post(url, data=data)
 
-# Function to scan the market for stocks under $10
-def scan_market():
-    global tracked_stocks
-    print(f"Scanning market at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
+def track_volatile_stocks():
+    """Scans the market every 2 minutes to track consistently rising stocks under $10 with 100%+ gains."""
 
-    # Get the top gainers & losers (Alpaca does not provide full market scanning, so we filter later)
-    active_assets = api.get_assets(status='active')
-    tradable_symbols = [asset.symbol for asset in active_assets if asset.tradable]
+    # Get all tradable stock symbols
+    assets = api.list_assets()
+    tickers = [asset.symbol for asset in assets if asset.tradable]
 
-    # Get last trade price for all symbols
-    quotes = api.get_latest_trade(tradable_symbols)
+    for ticker in tickers:
+        try:
+            # Fetch last 1-minute bar
+            bar = api.get_barset(ticker, "minute", limit=1).df
 
-    for symbol, trade in quotes.items():
-        price = trade.price
+            if ticker in bar and not bar[ticker].empty:
+                current_price = bar[ticker]["close"].iloc[-1]
 
-        # Only track stocks under $10
-        if price < 10:
-            if symbol not in tracked_stocks:
-                tracked_stocks[symbol] = {"prices": [], "timestamp": datetime.now()}
+                # Only track stocks with price < $10
+                if current_price >= 10:
+                    continue  
+                
+                # Store price history
+                if ticker not in price_tracking:
+                    price_tracking[ticker] = []
 
-            tracked_stocks[symbol]["prices"].append(price)
+                price_tracking[ticker].append(current_price)
 
-            # Keep only the last 14 minutes of data
-            if len(tracked_stocks[symbol]["prices"]) > 7:
-                tracked_stocks[symbol]["prices"].pop(0)
+                # Keep only the last 7 price points (14-minute window)
+                if len(price_tracking[ticker]) > 7:
+                    price_tracking[ticker].pop(0)
 
-            analyze_stock(symbol)
+                # Check if price has increased for 7 consecutive runs
+                if len(price_tracking[ticker]) == 7 and all(
+                    price_tracking[ticker][i] < price_tracking[ticker][i + 1] for i in range(6)
+                ):
+                    # Check if the price has jumped 100%+
+                    initial_price = price_tracking[ticker][0]
+                    percent_change = ((current_price - initial_price) / initial_price) * 100
 
-# Function to analyze price trends
-def analyze_stock(symbol):
-    prices = tracked_stocks[symbol]["prices"]
-    
-    if len(prices) < 7:  # Need at least 14 minutes of data for uptrend analysis
-        return
+                    if percent_change >= 100:
+                        alert_msg = f"🚨 ALERT: {ticker} has increased over 100% in 14 minutes! Current Price: ${current_price}"
+                        print(alert_msg)
+                        send_telegram_alert(alert_msg)  # Send Telegram notification
+                        del price_tracking[ticker]  # Reset tracking for this stock
 
-    first_price = prices[0]
-    latest_price = prices[-1]
+        except Exception as e:
+            continue  # Skip if data isn't available
 
-    # Check for **consistent increase over 14 minutes**
-    if all(prices[i] < prices[i + 1] for i in range(len(prices) - 1)):
-        percentage_gain = ((latest_price - first_price) / first_price) * 100
+# Schedule the script to run every 2 minutes
+schedule.every(1).minutes.do(track_volatile_stocks)
 
-        if percentage_gain >= 100:  # Ensure at least a 100% gain
-            message = f"🚀 {symbol} has surged **{percentage_gain:.2f}%** in 14 minutes!\nPrice: ${latest_price:.2f}"
-            send_telegram_message(message)
-            del tracked_stocks[symbol]  # Stop tracking after alert
+print("✅ Running market scan every 2 minutes... Alerts will be sent via Telegram!")
 
-    # Check for **consistent drop over 10 minutes** (5 runs)
-    elif len(prices) >= 5 and all(prices[i] > prices[i + 1] for i in range(4)):
-        percentage_drop = ((first_price - latest_price) / first_price) * 100
-
-        message = f"⚠️ {symbol} is dropping consistently! **-{percentage_drop:.2f}%** in 10 minutes.\nCurrent Price: ${latest_price:.2f}"
-        send_telegram_message(message)
-        del tracked_stocks[symbol]  # Stop tracking after alert
-
-# Main loop to run every 2 minutes
 while True:
-    scan_market()
-    time.sleep(120)  # Wait for 2 minutes
+    schedule.run_pending()
+    time.sleep(1)
