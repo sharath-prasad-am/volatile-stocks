@@ -1,3 +1,4 @@
+import os
 import time
 import requests
 import pandas as pd
@@ -5,6 +6,10 @@ from alpaca_trade_api.rest import REST
 from datetime import datetime
 
 BASE_URL = "https://paper-api.alpaca.markets"
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Initialize Alpaca API
 api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=BASE_URL)
