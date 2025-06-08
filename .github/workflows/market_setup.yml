@@ -2,8 +2,13 @@ name: Run Market Scanner
 
 on:
   schedule:
-    - cron: "*/5 12-16 * * 1-5"  # Runs every 2 minutes from 8 AM to 11 AM EST (Mon-Fri)
-  workflow_dispatch:  # Allows manual trigger
+    # 8:00 AM to 11:00 AM EST (every 1 minute)
+    - cron: "*/1 13-15 * * 1-5"  # 13:00 to 15:59 UTC
+    - cron: "0 16 * * 1-5"       # 11:00 AM sharp
+
+    # 11:00 AM to 3:00 PM EST (every 2 minutes)
+    - cron: "*/2 16-19 * * 1-5"  # 16:00 to 19:59 UTC
+  workflow_dispatch:  # allows manual trigger
 
 jobs:
   run-script:
@@ -19,13 +24,10 @@ jobs:
           python-version: "3.9"
 
       - name: Install Dependencies
-        run: pip install requests pandas alpaca-trade-api schedule
+        run: pip install requests pandas yfinance
 
       - name: Run Market Scanner
-        run: python market_scanner.py
+        run: python sqlite_stock_tracker.py
         env:
-          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
