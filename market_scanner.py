@@ -1,95 +1,128 @@
+
 import os
 import time
 import requests
-import pandas as pd
+import yfinance as yf
 from alpaca_trade_api.rest import REST
 from datetime import datetime
 
-BASE_URL = "https://paper-api.alpaca.markets"
+# Load secrets from environment variables
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+BASE_URL = "https://paper-api.alpaca.markets"
+
+# Validate secrets
+for key, value in {
+    "ALPACA_API_KEY": ALPACA_API_KEY,
+    "ALPACA_SECRET_KEY": ALPACA_SECRET_KEY,
+    "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
+    "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
+}.items():
+    if not value:
+        raise ValueError(f"❌ Missing required environment variable: {key}")
 
 # Initialize Alpaca API
 api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=BASE_URL)
 
-# Track stock movements
+# Track price history for each symbol
 tracked_stocks = {}
 
-# Function to send Telegram alerts
 def send_telegram_message(message):
+    """Send alert to Telegram"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     requests.post(url, data=payload)
 
-# Function to split symbols into chunks (to avoid 414 error)
-def chunk_list(lst, chunk_size):
+def chunk_list(lst, chunk_size=100):
+    """Split list into chunks"""
     for i in range(0, len(lst), chunk_size):
         yield lst[i:i + chunk_size]
 
-# Function to scan the market for stocks under $10
+def is_stock_eligible(symbol):
+    try:
+        stock = yf.Ticker(symbol)
+        info = stock.info
+
+        price = info.get("regularMarketPrice")
+        open_price = info.get("regularMarketOpen")
+        volume = info.get("averageVolume", 0)
+        market_cap = info.get("marketCap", 0)
+
+        if not price or not open_price or price < 0.3:
+            return False
+
+        if price >= 10:
+            return False
+
+        if volume < 500000:
+            return False
+
+        if market_cap < 50000000:
+            return False
+
+        change_percent = ((price - open_price) / open_price) * 100
+        if change_percent < 10:
+            return False
+
+        return True
+    except Exception as e:
+        return False
+
 def scan_market():
     global tracked_stocks
-    print(f"Scanning market at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
+    print(f"📊 Scanning at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
 
-    # Get active tradable assets from Alpaca
-    active_assets = api.list_assets()
-    tradable_symbols = [asset.symbol for asset in active_assets if asset.tradable and asset.exchange in ["NYSE", "NASDAQ"]]
+    try:
+        active_assets = api.list_assets()
+        tradable_symbols = [a.symbol for a in active_assets if a.tradable and a.exchange in ("NYSE", "NASDAQ")]
+    except Exception as e:
+        print(f"Error fetching assets: {e}")
+        return
 
-    # Fetch latest trade prices in chunks (to prevent 414 error)
-    quotes = {}
-    for chunk in chunk_list(tradable_symbols, 100):  # 100 symbols per request
+    for symbol in tradable_symbols:
+        if not is_stock_eligible(symbol):
+            continue
+
         try:
-            chunk_quotes = api.get_latest_trade(chunk)
-            quotes.update(chunk_quotes)
-        except Exception as e:
-            print(f"Error fetching data for chunk: {e}")
-
-    for symbol, trade in quotes.items():
-        price = trade.price
-
-        # Only track stocks under $10
-        if price < 10:
+            price = yf.Ticker(symbol).info.get("regularMarketPrice")
             if symbol not in tracked_stocks:
                 tracked_stocks[symbol] = {"prices": [], "timestamp": datetime.now()}
 
             tracked_stocks[symbol]["prices"].append(price)
 
-            # Keep only the last 14 minutes of data
             if len(tracked_stocks[symbol]["prices"]) > 7:
                 tracked_stocks[symbol]["prices"].pop(0)
 
             analyze_stock(symbol)
+        except Exception as e:
+            print(f"Error tracking {symbol}: {e}")
 
-# Function to analyze price trends
 def analyze_stock(symbol):
     prices = tracked_stocks[symbol]["prices"]
-    
-    if len(prices) < 7:  # Need at least 14 minutes of data for uptrend analysis
+    if len(prices) < 5:
         return
 
     first_price = prices[0]
     latest_price = prices[-1]
 
-    # Check for **consistent increase over 14 minutes**
-    if all(prices[i] < prices[i + 1] for i in range(len(prices) - 1)):
-        percentage_gain = ((latest_price - first_price) / first_price) * 100
+    if len(prices) == 7 and all(prices[i] < prices[i+1] for i in range(6)):
+        percent_gain = ((latest_price - first_price) / first_price) * 100
+        if percent_gain >= 100:
+            msg = f"🚀 {symbol} surged {percent_gain:.2f}% in 14 mins!\nCurrent: ${latest_price:.2f}"
+            send_telegram_message(msg)
+            print(msg)
+            del tracked_stocks[symbol]
 
-        if percentage_gain >= 100:  # Ensure at least a 100% gain
-            message = f"🚀 {symbol} has surged **{percentage_gain:.2f}%** in 14 minutes!\nPrice: ${latest_price:.2f}"
-            send_telegram_message(message)
-            del tracked_stocks[symbol]  # Stop tracking after alert
+    elif len(prices) >= 5 and all(prices[i] > prices[i+1] for i in range(4)):
+        percent_drop = ((first_price - latest_price) / first_price) * 100
+        msg = f"⚠️ {symbol} dropped {percent_drop:.2f}% in 10 mins!\nCurrent: ${latest_price:.2f}"
+        send_telegram_message(msg)
+        print(msg)
+        del tracked_stocks[symbol]
 
-    # Check for **consistent drop over 10 minutes** (5 runs)
-    elif len(prices) >= 5 and all(prices[i] > prices[i + 1] for i in range(4)):
-        percentage_drop = ((first_price - latest_price) / first_price) * 100
-
-        message = f"⚠️ {symbol} is dropping consistently! **-{percentage_drop:.2f}%** in 10 minutes.\nCurrent Price: ${latest_price:.2f}"
-        send_telegram_message(message)
-        del tracked_stocks[symbol]  # Stop tracking after alert
-
-# Main loop to run every 2 minutes
-while True:
-    scan_market()
-    time.sleep(120)  # Wait for 2 minutes
+if __name__ == "__main__":
+    while True:
+        scan_market()
+        time.sleep(120)  # 2-minute intervals
